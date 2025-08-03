@@ -2,39 +2,24 @@ const WebSocket = require('ws')
 const PORT = process.env.PORT || 3000
 
 const wss = new WebSocket.Server({ port: PORT })
-const clients = new Map() // Map<clientId, WebSocket>
+const clients = new Set()
 
 wss.on('connection', (ws) => {
-  let clientId = null
+  clients.add(ws)
+  console.log('Client connected')
 
   ws.on('message', (message) => {
-    try {
-      const data = JSON.parse(message.toString())
-
-      // Klient sa registruje so svojim clientId
-      if (data.type === 'register') {
-        clientId = data.clientId
-        clients.set(clientId, ws)
-        console.log(`✅ Klient zaregistrovaný: ${clientId}`)
-        return
+    for (const client of clients) {
+      if (client !== ws && client.readyState === WebSocket.OPEN) {
+        client.send(message.toString())
       }
-
-      // Posielame správu určenému klientovi
-      const recipientSocket = clients.get(data.to)
-      if (recipientSocket && recipientSocket.readyState === WebSocket.OPEN) {
-        recipientSocket.send(JSON.stringify(data))
-      }
-    } catch (err) {
-      console.error('❌ Neplatná správa:', err)
     }
   })
 
   ws.on('close', () => {
-    if (clientId && clients.has(clientId)) {
-      clients.delete(clientId)
-      console.log(`❌ Klient odpojený: ${clientId}`)
-    }
+    clients.delete(ws)
+    console.log('Client disconnected')
   })
 })
 
-console.log(`✅ WebSocket server beží na porte ${PORT}`)
+console.log(`✅ WebSocket server running on port ${PORT}`)
