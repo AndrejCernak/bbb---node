@@ -1,12 +1,21 @@
 const WebSocket = require('ws')
+const { readFileSync } = require('fs')
+const { GoogleAuth } = require('google-auth-library')
 const fetch = require('node-fetch')
 
 const PORT = process.env.PORT || 3000
-const FCM_SERVER_KEY = 'TVOJ_FIREBASE_SERVER_KEY' // ⚠️ Nahraď skutočným FCM server key
-
 const wss = new WebSocket.Server({ port: PORT })
+
 const clients = new Set()
-const fcmTokens = new Map() // Mapuje socket → FCM token
+const fcmTokens = new Map()
+
+// 🔐 Service Account načítanie
+const serviceAccount = JSON.parse(readFileSync('./firebase-service-account.json', 'utf8'))
+
+const auth = new GoogleAuth({
+  credentials: serviceAccount,
+  scopes: ['https://www.googleapis.com/auth/firebase.messaging'],
+})
 
 wss.on('connection', (ws) => {
   clients.add(ws)
@@ -15,19 +24,18 @@ wss.on('connection', (ws) => {
   ws.on('message', async (message) => {
     const data = JSON.parse(message.toString())
 
-    // Klient poslal FCM token
+    // Ulož FCM token
     if (data.type === 'fcm-token') {
       fcmTokens.set(ws, data.token)
-      console.log('🔐 FCM token saved:', data.token)
+      console.log('💾 Saved FCM token')
       return
     }
 
-    // WebRTC Signaling správa (offer, answer, ice)
+    // Posielanie signaling dát + notifikácie
     for (const client of clients) {
       if (client !== ws && client.readyState === WebSocket.OPEN) {
         client.send(JSON.stringify(data))
 
-        // Ak ide o prichádzajúci hovor => push notifikácia
         if (data.type === 'offer') {
           const token = fcmTokens.get(client)
           if (token) {
@@ -47,28 +55,32 @@ wss.on('connection', (ws) => {
 
 console.log(`🚀 WebSocket server running on port ${PORT}`)
 
-// 🔔 Push notifikácia cez FCM
+// 📨 Funkcia na odoslanie notifikácie cez FCM HTTP v1
 async function sendPushNotification(fcmToken) {
-  const response = await fetch('https://fcm.googleapis.com/fcm/send', {
+  const accessToken = await auth.getAccessToken()
+
+  const res = await fetch(`https://fcm.googleapis.com/v1/projects/${serviceAccount.project_id}/messages:send`, {
     method: 'POST',
     headers: {
-      Authorization: `key=${FCM_SERVER_KEY}`,
+      Authorization: `Bearer ${accessToken.token}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      to: fcmToken,
-      notification: {
-        title: 'Prichádzajúci hovor',
-        body: 'Klikni na notifikáciu a pripoj sa',
-        icon: '/icon.png',
-        click_action: 'https://aaa-poll.vercel.app', // ⚠️ uprav na tvoju URL
-      },
-      data: {
-        type: 'incoming_call',
+      message: {
+        token: fcmToken,
+        notification: {
+          title: '📞 Prichádzajúci hovor',
+          body: 'Klikni pre prijatie videohovoru',
+        },
+        webpush: {
+          fcmOptions: {
+            link: 'https://aaa-poll.vercel.app', // uprav na tvoju PWA URL
+          },
+        },
       },
     }),
   })
 
-  const result = await response.json()
-  console.log('📨 FCM response:', result)
+  const json = await res.json()
+  console.log('🔔 Notifikácia odoslaná:', json)
 }
