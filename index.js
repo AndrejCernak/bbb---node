@@ -23,44 +23,50 @@ const auth = new GoogleAuth({
 wss.on('connection', (ws) => {
   console.log('✅ Client connected');
 
-  // Keď sa pripojí, ešte nepoznáme jeho rolu ani token
+  // Inicializuj prázdny záznam
   clients.set(ws, { role: null, fcmToken: null });
 
   ws.on('message', async (message) => {
     const data = JSON.parse(message.toString());
     const clientInfo = clients.get(ws) || {};
 
-    // 1️⃣ Registrácia role (klient/admin) + uloženie FCM tokenu
+    // 1️⃣ Registrácia role
     if (data.type === 'register') {
-      clients.set(ws, { role: data.role, fcmToken: clientInfo.fcmToken });
+      clients.set(ws, { ...clientInfo, role: data.role });
       console.log(`👤 Client registered as ${data.role}`);
       return;
     }
 
+    // 2️⃣ Uloženie FCM tokenu
     if (data.type === 'fcm-token') {
       clients.set(ws, { ...clientInfo, fcmToken: data.token });
-      console.log('💾 Saved FCM token for', clientInfo.role || 'unknown');
+      console.log(`💾 Saved FCM token for role: ${clientInfo.role || 'unknown'}`);
       return;
     }
 
-    // 2️⃣ Posielanie signaling dát
+    // 3️⃣ Signaling: offer → admin
     if (data.type === 'offer') {
-      // Nájdeme pripojeného admina (poradcu)
+      console.log('📨 Offer received from client. Looking for admin...');
       for (const [conn, info] of clients.entries()) {
         if (info.role === 'admin' && conn.readyState === WebSocket.OPEN) {
+          console.log('➡️ Sending offer to admin');
           conn.send(JSON.stringify({ type: 'offer', offer: data.offer }));
 
-          // Pošli push notifikáciu adminovi
+          // Push notifikácia adminovi
           if (info.fcmToken) {
+            console.log('🔔 Sending push to admin:', info.fcmToken);
             await sendPushNotification(info.fcmToken);
+          } else {
+            console.log('⚠️ Admin has no FCM token registered.');
           }
         }
       }
       return;
     }
 
+    // 4️⃣ Signaling: answer → client
     if (data.type === 'answer') {
-      // Nájdeme pripojeného klienta
+      console.log('📨 Answer received from admin. Sending to client...');
       for (const [conn, info] of clients.entries()) {
         if (info.role === 'client' && conn.readyState === WebSocket.OPEN) {
           conn.send(JSON.stringify({ type: 'answer', answer: data.answer }));
@@ -69,8 +75,8 @@ wss.on('connection', (ws) => {
       return;
     }
 
+    // 5️⃣ ICE candidates
     if (data.type === 'ice') {
-      // Posielaj ICE kandidáta všetkým okrem odosielateľa
       for (const [conn] of clients.entries()) {
         if (conn !== ws && conn.readyState === WebSocket.OPEN) {
           conn.send(JSON.stringify({ type: 'ice', candidate: data.candidate }));
@@ -90,33 +96,42 @@ console.log(`🚀 WebSocket server running on port ${PORT}`);
 
 // 📨 Odoslanie notifikácie cez FCM HTTP v1
 async function sendPushNotification(fcmToken) {
-  const accessToken = await auth.getAccessToken();
+  try {
+    const accessToken = await auth.getAccessToken();
 
-  const res = await fetch(
-    `https://fcm.googleapis.com/v1/projects/${serviceAccount.project_id}/messages:send`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${accessToken.token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        message: {
-          token: fcmToken,
-          notification: {
-            title: '📞 Prichádzajúci hovor',
-            body: 'Klikni pre prijatie videohovoru',
-          },
-          webpush: {
-            fcmOptions: {
-              link: 'https://aaa-poll.vercel.app', // URL tvojej PWA
+    const res = await fetch(
+      `https://fcm.googleapis.com/v1/projects/${serviceAccount.project_id}/messages:send`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken.token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: {
+            token: fcmToken,
+            notification: {
+              title: '📞 Prichádzajúci hovor',
+              body: 'Klikni pre prijatie videohovoru',
+            },
+            webpush: {
+              fcmOptions: {
+                link: 'https://aaa-poll.vercel.app', // URL tvojej PWA
+              },
             },
           },
-        },
-      }),
-    }
-  );
+        }),
+      }
+    );
 
-  const json = await res.json();
-  console.log('🔔 Notifikácia odoslaná:', json);
+    const json = await res.json();
+
+    if (!res.ok) {
+      console.error('❌ FCM push failed:', json);
+    } else {
+      console.log('✅ FCM push sent successfully:', json);
+    }
+  } catch (err) {
+    console.error('🔥 Error sending FCM push:', err);
+  }
 }
