@@ -10,6 +10,7 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "dotenv": "^17.2.1",
     "google-auth-library": "^10.2.0",
     "ws": "^8.18.3"
   }
