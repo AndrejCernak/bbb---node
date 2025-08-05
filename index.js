@@ -31,16 +31,17 @@ wss.on('connection', (ws) => {
     const clientInfo = clients.get(ws) || {};
 
     if (data.type === 'register') {
-      clients.set(ws, { ...clientInfo, role: data.role });
-      console.log(`👤 Client registered as ${data.role}`);
-      return;
-    }
+  clients.set(ws, { ...clients.get(ws), role: data.role });
+  console.log(`👤 Client registered as ${data.role}`);
+  return;
+}
 
-    if (data.type === 'fcm-token') {
-      clients.set(ws, { ...clientInfo, fcmToken: data.token });
-      console.log(`💾 Saved FCM token for role: ${clientInfo.role || 'unknown'}`);
-      return;
-    }
+if (data.type === 'fcm-token') {
+  clients.set(ws, { ...clients.get(ws), fcmToken: data.token });
+  console.log(`💾 Saved FCM token for role: ${clients.get(ws)?.role || 'unknown'}`);
+  return;
+}
+
 
     if (data.type === 'offer') {
       console.log('📨 Offer received from client. Looking for admin...');
