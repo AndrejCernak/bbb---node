@@ -1,50 +1,45 @@
+require('dotenv').config();
 const WebSocket = require('ws');
-const { readFileSync } = require('fs');
 const { GoogleAuth } = require('google-auth-library');
 const fetch = require('node-fetch');
 
 const PORT = process.env.PORT || 3000;
 const wss = new WebSocket.Server({ port: PORT });
 
-/**
- * Uchováme info o pripojených klientoch:
- * key = ws objekt, value = { role: 'client' | 'admin', fcmToken?: string }
- */
-const clients = new Map();
-
-// 🔐 Načítanie Firebase Service Account
-const serviceAccount = JSON.parse(readFileSync('./firebase-service-account.json', 'utf8'));
+// 🔐 Firebase credentials z .env
+const serviceAccount = {
+  project_id: process.env.FIREBASE_PROJECT_ID,
+  private_key: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+  client_email: process.env.FIREBASE_CLIENT_EMAIL,
+};
 
 const auth = new GoogleAuth({
   credentials: serviceAccount,
   scopes: ['https://www.googleapis.com/auth/firebase.messaging'],
 });
 
+const clients = new Map();
+
 wss.on('connection', (ws) => {
   console.log('✅ Client connected');
-
-  // Inicializuj prázdny záznam
   clients.set(ws, { role: null, fcmToken: null });
 
   ws.on('message', async (message) => {
     const data = JSON.parse(message.toString());
     const clientInfo = clients.get(ws) || {};
 
-    // 1️⃣ Registrácia role
     if (data.type === 'register') {
       clients.set(ws, { ...clientInfo, role: data.role });
       console.log(`👤 Client registered as ${data.role}`);
       return;
     }
 
-    // 2️⃣ Uloženie FCM tokenu
     if (data.type === 'fcm-token') {
       clients.set(ws, { ...clientInfo, fcmToken: data.token });
       console.log(`💾 Saved FCM token for role: ${clientInfo.role || 'unknown'}`);
       return;
     }
 
-    // 3️⃣ Signaling: offer → admin
     if (data.type === 'offer') {
       console.log('📨 Offer received from client. Looking for admin...');
       for (const [conn, info] of clients.entries()) {
@@ -52,7 +47,6 @@ wss.on('connection', (ws) => {
           console.log('➡️ Sending offer to admin');
           conn.send(JSON.stringify({ type: 'offer', offer: data.offer }));
 
-          // Push notifikácia adminovi
           if (info.fcmToken) {
             console.log('🔔 Sending push to admin:', info.fcmToken);
             await sendPushNotification(info.fcmToken);
@@ -64,7 +58,6 @@ wss.on('connection', (ws) => {
       return;
     }
 
-    // 4️⃣ Signaling: answer → client
     if (data.type === 'answer') {
       console.log('📨 Answer received from admin. Sending to client...');
       for (const [conn, info] of clients.entries()) {
@@ -75,7 +68,6 @@ wss.on('connection', (ws) => {
       return;
     }
 
-    // 5️⃣ ICE candidates
     if (data.type === 'ice') {
       for (const [conn] of clients.entries()) {
         if (conn !== ws && conn.readyState === WebSocket.OPEN) {
@@ -94,7 +86,7 @@ wss.on('connection', (ws) => {
 
 console.log(`🚀 WebSocket server running on port ${PORT}`);
 
-// 📨 Odoslanie notifikácie cez FCM HTTP v1
+// 📨 Odoslanie notifikácie
 async function sendPushNotification(fcmToken) {
   try {
     const accessToken = await auth.getAccessToken();
@@ -116,7 +108,7 @@ async function sendPushNotification(fcmToken) {
             },
             webpush: {
               fcmOptions: {
-                link: 'https://aaa-poll.vercel.app', // URL tvojej PWA
+                link: 'https://aaa-poll.vercel.app',
               },
             },
           },
@@ -125,7 +117,6 @@ async function sendPushNotification(fcmToken) {
     );
 
     const json = await res.json();
-
     if (!res.ok) {
       console.error('❌ FCM push failed:', json);
     } else {
