@@ -1,7 +1,6 @@
 require('dotenv').config();
 const WebSocket = require('ws');
 const { GoogleAuth } = require('google-auth-library');
-const fetch = require('node-fetch');
 
 
 const PORT = process.env.PORT || 3000;
